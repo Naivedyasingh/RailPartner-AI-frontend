@@ -1,199 +1,340 @@
 import streamlit as st
+import requests
 from datetime import datetime
 
-# ─── PAGE CONFIG ──────────────────────────────────────────────────────────────
+API_BASE = "https://railpartner-ai.onrender.com"
+
 st.set_page_config(
-    page_title="RailSense Lite — Crowd & Seat Predictor",
-    page_icon="🚆",
+    page_title="RailPartner AI",
+    page_icon="🚂",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
-# ─── GLOBAL STYLES ────────────────────────────────────────────────────────────
+# ── Minimal safe CSS ───────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap');
-
-*, *::before, *::after { box-sizing: border-box; }
-html, body, [data-testid="stAppViewContainer"] {
-    background: #0a0d12 !important;
-    font-family: 'DM Sans', sans-serif;
-    color: #e8eaf0;
-}
 #MainMenu, footer, header { visibility: hidden; }
-[data-testid="stToolbar"] { display: none; }
-.block-container { padding: 2rem 2.5rem 4rem !important; max-width: 1200px; }
-[data-testid="stSidebar"] {
-    background: #0d1117 !important;
-    border-right: 1px solid #1e2330;
-}
-[data-testid="stSidebar"] .block-container { padding: 1.5rem 1.2rem !important; }
-.hero-title {
-    font-family: 'Syne', sans-serif;
-    font-size: 3rem; font-weight: 800;
-    letter-spacing: -1px; line-height: 1.1;
-    background: linear-gradient(135deg, #e8eaf0 30%, #5ce1e6 70%, #7b61ff 100%);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    background-clip: text; margin-bottom: 0.25rem;
-}
-.hero-sub {
-    font-family: 'DM Mono', monospace; font-size: 0.78rem;
-    color: #5ce1e6; letter-spacing: 3px;
-    text-transform: uppercase; margin-bottom: 2rem;
-}
-.section-head {
-    font-family: 'Syne', sans-serif; font-size: 0.68rem;
-    font-weight: 700; letter-spacing: 3px;
-    text-transform: uppercase; color: #5a6480;
-    margin: 1.6rem 0 0.7rem; padding-bottom: 0.4rem;
-    border-bottom: 1px solid #1e2330;
-}
-.rail-card {
-    background: #0d1117; border: 1px solid #1e2330;
-    border-radius: 14px; padding: 1.5rem;
-    margin-bottom: 1rem; transition: border-color 0.2s;
-}
-.rail-card:hover { border-color: #2a3450; }
-.badge { display: inline-block; padding: 3px 10px; border-radius: 100px; font-family: 'DM Mono', monospace; font-size: 0.62rem; font-weight: 500; letter-spacing: 1.5px; text-transform: uppercase; }
-.badge-green  { background: #0d2e1f; color: #4ade80; border: 1px solid #1a5e3a; }
-.badge-yellow { background: #2e2000; color: #f9a825; border: 1px solid #5e4000; }
-.badge-red    { background: #2e0d0d; color: #ff6f61; border: 1px solid #5e1a1a; }
-.stTextInput > div > div > input,
-.stNumberInput > div > div > input,
-.stSelectbox > div > div > div {
-    background: #0d1117 !important; border: 1px solid #1e2330 !important;
-    border-radius: 8px !important; color: #e8eaf0 !important;
-    font-family: 'DM Sans', sans-serif !important;
-}
-.stButton > button {
-    background: linear-gradient(135deg, #5ce1e6, #7b61ff) !important;
-    color: #0a0d12 !important; border: none !important;
-    border-radius: 8px !important; font-family: 'Syne', sans-serif !important;
-    font-weight: 700 !important; font-size: 0.9rem !important;
-    padding: 0.55rem 1.5rem !important;
-}
-.stButton > button:hover { opacity: 0.85 !important; }
-label { color: #8896b3 !important; font-size: 0.83rem !important; }
+.block-container { padding-top: 2rem; padding-bottom: 2rem; }
+div[data-testid="stForm"] { border: none; padding: 0; }
 </style>
 """, unsafe_allow_html=True)
 
-# ─── SIDEBAR ─────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown('<div class="hero-title" style="font-size:1.6rem;">🚆 RailSense Lite</div>', unsafe_allow_html=True)
-    st.markdown('<div class="hero-sub">Rule‑Based Predictor</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-head">How it works</div>', unsafe_allow_html=True)
-    st.markdown("""
-    <div class="rail-card" style="font-size:0.85rem;color:#8896b3;line-height:2;">
-        This version uses <b style="color:#e8eaf0;">no ML model</b>.<br>
-        Crowds and seat availability are estimated using simple <b style="color:#5ce1e6;">if‑elif‑else rules</b> on your input.<br>
-        You can submit this as a concept project.
-    </div>
-    """, unsafe_allow_html=True)
+# ── Session state ──────────────────────────────────────────────────────────────
+if "token" not in st.session_state:
+    st.session_state.token = None
+if "user" not in st.session_state:
+    st.session_state.user = None
 
-# ─── MAIN HEADER ──────────────────────────────────────────────────────────────
-st.markdown('<div class="hero-title">RailSense Lite</div>', unsafe_allow_html=True)
-st.markdown('<div class="hero-sub">Crowd & Seat Intelligence (Rule‑Based)</div>', unsafe_allow_html=True)
+# ── API helpers ────────────────────────────────────────────────────────────────
+def api_post(endpoint, payload, token=None):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        r = requests.post(f"{API_BASE}{endpoint}", json=payload, headers=headers, timeout=30)
+        return r.status_code, r.json() if r.content else {}
+    except requests.exceptions.ConnectionError:
+        return 503, {"detail": "Server is waking up, try again in 30 seconds."}
+    except Exception as e:
+        return 500, {"detail": str(e)}
 
-# ─── INPUT FORM ──────────────────────────────────────────────────────────────
-col_form, col_result = st.columns([1.1, 1], gap="large")
+def api_post_form(endpoint, data):
+    try:
+        r = requests.post(f"{API_BASE}{endpoint}", data=data, timeout=30)
+        return r.status_code, r.json() if r.content else {}
+    except requests.exceptions.ConnectionError:
+        return 503, {"detail": "Server is waking up, try again in 30 seconds."}
+    except Exception as e:
+        return 500, {"detail": str(e)}
 
-with col_form:
-    st.markdown('<div class="section-head">Journey Details</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    with c1:
-        journey_type = st.selectbox("Journey Type", ["Express", "Superfast", "Local", "Mail", "Intercity", "Rajdhani"])
-    with c2:
-        distance = st.number_input("Distance (km)", 1.0, 5000.0, 450.0, 10.0)
+def api_get(endpoint, token, params=None):
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        r = requests.get(f"{API_BASE}{endpoint}", headers=headers, params=params, timeout=30)
+        return r.status_code, r.json() if r.content else {}
+    except requests.exceptions.ConnectionError:
+        return 503, {"detail": "Server is waking up, try again in 30 seconds."}
+    except Exception as e:
+        return 500, {"detail": str(e)}
 
-    c3, c4 = st.columns(2)
-    with c3:
-        month = st.selectbox("Month", list(range(1, 13)),
-                             format_func=lambda m: datetime(2024, m, 1).strftime("%B"),
-                             index=5)
-    with c4:
-        holiday_type = st.selectbox("Holiday Type", [0,1,2], format_func=lambda x: {0:"None",1:"Minor",2:"Major"}[x])
+def api_delete(endpoint, token):
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        r = requests.delete(f"{API_BASE}{endpoint}", headers=headers, timeout=30)
+        return r.status_code, {}
+    except Exception as e:
+        return 500, {"detail": str(e)}
 
-    is_weekend = st.checkbox("Weekend Journey", value=False)
 
-    st.markdown('<div class="section-head">General Coach Seats</div>', unsafe_allow_html=True)
-    c5, c6 = st.columns(2)
-    with c5:
-        sl_capacity = st.number_input("SL Capacity", 0, 2000, 600, 50)
-        sl_booked   = st.number_input("SL Booked", 0, 2000, 420, 10)
-    with c6:
-        ac3_capacity = st.number_input("AC3 Capacity", 0, 1000, 300, 25)
-        ac3_booked   = st.number_input("AC3 Booked", 0, 1000, 210, 10)
+# ══════════════════════════════════════════════════════════════════════════════
+#  AUTH SCREEN
+# ══════════════════════════════════════════════════════════════════════════════
+if not st.session_state.token:
 
-    c7, c8 = st.columns(2)
-    with c7:
-        ac2_capacity = st.number_input("AC2 Capacity", 0, 500, 100, 10)
-        ac2_booked   = st.number_input("AC2 Booked", 0, 500, 80, 5)
-    with c8:
-        ac1_capacity = st.number_input("AC1 Capacity", 0, 200, 24, 4)
-        ac1_booked   = st.number_input("AC1 Booked", 0, 200, 18, 1)
+    st.title("🚂 RailPartner AI")
+    st.caption("Predict crowd levels and seat availability before you board.")
+    st.divider()
 
-    predict_btn = st.button("⚡ Run Prediction", use_container_width=True)
+    tab_login, tab_reg = st.tabs(["Sign in", "Create account"])
 
-# ─── RULE-BASED PREDICTION ───────────────────────────────────────────────────
-with col_result:
-    st.markdown('<div class="section-head">Prediction Result</div>', unsafe_allow_html=True)
-    
-    if not predict_btn:
-        st.markdown("""
-        <div class="rail-card" style="border-style:dashed;text-align:center;padding:3rem 1.5rem;border-color:#1e2330;">
-            <div style="font-size:2.5rem;margin-bottom:0.8rem;">⚡</div>
-            <div style="font-family:'Syne',sans-serif;font-size:1rem;font-weight:700;color:#3a4560;margin-bottom:0.4rem;">Ready to predict</div>
-            <div style="font-size:0.8rem;color:#2a3450;">Fill the form and click Run Prediction</div>
-        </div>
-        """, unsafe_allow_html=True)
+    with tab_login:
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Sign in →", use_container_width=True)
+
+        if submitted:
+            if username and password:
+                with st.spinner("Signing in…"):
+                    code, data = api_post_form(
+                        "/api/auth/login",
+                        {"username": username, "password": password}
+                    )
+                if code == 200:
+                    st.session_state.token = data["access_token"]
+                    st.session_state.user  = data["user"]
+                    st.rerun()
+                else:
+                    st.error(data.get("detail", "Login failed"))
+            else:
+                st.warning("Please fill in both fields.")
+
+    with tab_reg:
+        with st.form("register_form"):
+            r_email = st.text_input("Email")
+            r_user  = st.text_input("Username")
+            r_pass  = st.text_input("Password (min 8 characters)", type="password")
+            submitted_r = st.form_submit_button("Create account →", use_container_width=True)
+
+        if submitted_r:
+            if r_email and r_user and r_pass:
+                with st.spinner("Creating account…"):
+                    code, data = api_post(
+                        "/api/auth/register",
+                        {"email": r_email, "username": r_user, "password": r_pass}
+                    )
+                if code == 201:
+                    st.success("✅ Account created! Switch to Sign in tab.")
+                else:
+                    st.error(data.get("detail", "Registration failed"))
+            else:
+                st.warning("Please fill in all fields.")
+
+    st.stop()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MAIN APP
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Top bar
+col_title, col_user = st.columns([4, 1])
+with col_title:
+    st.title("🚂 RailPartner AI")
+with col_user:
+    uname = st.session_state.user.get("username", "User") if st.session_state.user else "User"
+    st.markdown(f"<br>👤 **{uname}**", unsafe_allow_html=True)
+    if st.button("Sign out"):
+        st.session_state.token = None
+        st.session_state.user  = None
+        st.rerun()
+
+st.divider()
+
+tab_pred, tab_hist = st.tabs(["🔍 Predict", "📋 History"])
+
+
+# ── PREDICT TAB ───────────────────────────────────────────────────────────────
+with tab_pred:
+
+    with st.form("predict_form"):
+        st.subheader("Journey details")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            journey_type = st.selectbox(
+                "Train type",
+                ["express", "superfast", "local", "mail", "intercity", "rajdhani"],
+                index=1
+            )
+        with c2:
+            distance = st.number_input("Distance (km)", min_value=1, max_value=5000, value=450, step=10)
+        with c3:
+            month = st.selectbox(
+                "Month",
+                options=list(range(1, 13)),
+                format_func=lambda m: datetime(2024, m, 1).strftime("%B"),
+                index=5
+            )
+
+        c4, c5 = st.columns(2)
+        with c4:
+            is_weekend = st.checkbox("Weekend journey", value=True)
+        with c5:
+            holiday_type = st.selectbox(
+                "Holiday type",
+                [0, 1, 2],
+                format_func=lambda x: ["None", "Public holiday", "Festival season"][x]
+            )
+
+        st.subheader("Coach capacity")
+        cc1, cc2, cc3, cc4 = st.columns(4)
+        with cc1: sl_capacity  = st.number_input("SL capacity",  min_value=0, value=300, step=10)
+        with cc2: ac3_capacity = st.number_input("3A capacity",  min_value=0, value=150, step=10)
+        with cc3: ac2_capacity = st.number_input("2A capacity",  min_value=0, value=100, step=10)
+        with cc4: ac1_capacity = st.number_input("1A capacity",  min_value=0, value=50,  step=10)
+
+        st.subheader("Current bookings")
+        bc1, bc2, bc3, bc4 = st.columns(4)
+        with bc1: sl_booked  = st.number_input("SL booked",  min_value=0, value=240, step=10)
+        with bc2: ac3_booked = st.number_input("3A booked",  min_value=0, value=120, step=10)
+        with bc3: ac2_booked = st.number_input("2A booked",  min_value=0, value=50,  step=10)
+        with bc4: ac1_booked = st.number_input("1A booked",  min_value=0, value=20,  step=10)
+
+        st.write("")
+        submitted = st.form_submit_button("🔍 Predict now", use_container_width=True, type="primary")
+
+    if submitted:
+        payload = {
+            "is_weekend":   is_weekend,
+            "holiday_type": holiday_type,
+            "distance":     float(distance),
+            "month":        month,
+            "journey_type": journey_type,
+            "sl_capacity":  sl_capacity,
+            "ac3_capacity": ac3_capacity,
+            "sl_booked":    sl_booked,
+            "ac3_booked":   ac3_booked,
+            "ac2_booked":   ac2_booked,
+            "ac1_booked":   ac1_booked,
+            "ac2_capacity": ac2_capacity,
+            "ac1_capacity": ac1_capacity,
+        }
+        with st.spinner("Running prediction…"):
+            code, data = api_post("/api/predict", payload, st.session_state.token)
+
+        if code == 200:
+            crowd = data["crowd"]
+            seat  = data["seat"]
+
+            st.divider()
+            st.subheader("Prediction results")
+
+            r1, r2 = st.columns(2)
+
+            with r1:
+                st.markdown("#### 👥 Crowd Level")
+                crowd_label = crowd["label"]
+                conf        = crowd["confidence"]
+
+                if crowd_label == "High":
+                    st.error(f"**{crowd_label}** — {conf:.1%} confidence")
+                elif crowd_label == "Medium":
+                    st.warning(f"**{crowd_label}** — {conf:.1%} confidence")
+                else:
+                    st.success(f"**{crowd_label}** — {conf:.1%} confidence")
+
+                st.progress(conf)
+                st.caption("Probability breakdown")
+                for k, v in sorted(crowd["probabilities"].items(), key=lambda x: -x[1]):
+                    st.markdown(f"- **{k}**: {v:.1%}")
+
+            with r2:
+                st.markdown("#### 💺 Seat Availability")
+                seat_label = seat["label"]
+                conf2      = seat["confidence"]
+
+                if "High" in seat_label:
+                    st.success(f"**{seat_label}** — {conf2:.1%} confidence")
+                elif "Medium" in seat_label:
+                    st.warning(f"**{seat_label}** — {conf2:.1%} confidence")
+                else:
+                    st.error(f"**{seat_label}** — {conf2:.1%} confidence")
+
+                st.progress(conf2)
+                st.caption("Probability breakdown")
+                for k, v in sorted(seat["probabilities"].items(), key=lambda x: -x[1]):
+                    st.markdown(f"- **{k}**: {v:.1%}")
+
+        elif code == 401:
+            st.error("Session expired. Please sign in again.")
+            st.session_state.token = None
+            st.session_state.user  = None
+            st.rerun()
+        else:
+            st.error(f"Prediction failed: {data.get('detail', 'Unknown error')}")
+
+
+# ── HISTORY TAB ───────────────────────────────────────────────────────────────
+with tab_hist:
+
+    col_a, col_b = st.columns([3, 1])
+    with col_b:
+        limit = st.selectbox("Show last", [10, 20, 50], index=0)
+    with col_a:
+        st.write("")
+        refresh = st.button("🔄 Refresh", key="refresh_hist")
+
+    code, data = api_get(
+        "/api/predict/history",
+        st.session_state.token,
+        params={"limit": limit}
+    )
+
+    if code == 200:
+        if not data:
+            st.info("No predictions yet. Run your first prediction in the Predict tab.")
+        else:
+            st.caption(f"Showing {len(data)} most recent predictions")
+            st.divider()
+
+            for rec in data:
+                dt     = datetime.fromisoformat(rec["created_at"].replace("Z", "+00:00"))
+                dt_str = dt.strftime("%d %b %Y · %H:%M")
+                jtype  = (rec.get("journey_type") or "Unknown").capitalize()
+
+                col_info, col_crowd, col_seat, col_del = st.columns([3, 2, 2, 1])
+
+                with col_info:
+                    st.markdown(f"**{jtype}** · {rec['distance']:.0f} km")
+                    st.caption(dt_str)
+
+                with col_crowd:
+                    cl = rec["crowd_level"]
+                    if cl == "High":
+                        st.error(f"👥 {cl}")
+                    elif cl == "Medium":
+                        st.warning(f"👥 {cl}")
+                    else:
+                        st.success(f"👥 {cl}")
+
+                with col_seat:
+                    ss = rec["seat_status"]
+                    if "High" in ss:
+                        st.success(f"💺 {ss}")
+                    elif "Medium" in ss:
+                        st.warning(f"💺 {ss}")
+                    else:
+                        st.error(f"💺 {ss}")
+
+                with col_del:
+                    if st.button("🗑️", key=f"del_{rec['id']}", help="Delete"):
+                        d_code, _ = api_delete(
+                            f"/api/predict/history/{rec['id']}",
+                            st.session_state.token
+                        )
+                        if d_code == 204:
+                            st.success("Deleted")
+                            st.rerun()
+                        else:
+                            st.error("Failed")
+
+                st.divider()
+
+    elif code == 401:
+        st.error("Session expired. Please sign in again.")
+        st.session_state.token = None
+        st.session_state.user  = None
+        st.rerun()
     else:
-        # ── Compute total capacity and booked
-        total_cap    = sl_capacity + ac3_capacity + ac2_capacity + ac1_capacity
-        total_booked = sl_booked + ac3_booked + ac2_booked + ac1_booked
-        occ_ratio = (total_booked / total_cap) if total_cap > 0 else 0
-        occ_pct = occ_ratio * 100
-
-        # ── Crowd level
-        if occ_ratio <= 0.5:
-            crowd_level = "low"
-        elif occ_ratio <= 0.8:
-            crowd_level = "medium"
-        else:
-            crowd_level = "high"
-
-        # ── Seat availability (SL + AC3)
-        gen_seats = sl_capacity + ac3_capacity
-        gen_booked = sl_booked + ac3_booked
-        gen_ratio = (gen_booked / gen_seats) if gen_seats > 0 else 0
-        if gen_ratio <= 0.6:
-            seat_avail = "available"
-        elif gen_ratio <= 0.85:
-            seat_avail = "limited"
-        else:
-            seat_avail = "unavailable"
-
-        # ── Confidence (UI only)
-        crowd_conf = 0.75 + 0.25 * min(occ_ratio, 1.0)
-        seat_conf  = 0.70 + 0.30 * (1.0 - gen_ratio)
-
-        # ── Badges
-        badge_crowd = lambda x: f'<span class="badge badge-{"green" if x=="low" else "yellow" if x=="medium" else "red"}">{x.title()}</span>'
-        badge_seat  = lambda x: f'<span class="badge badge-{"green" if x=="available" else "yellow" if x=="limited" else "red"}">{x.title()}</span>'
-
-        # ── Show result cards
-        st.markdown(f"""
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.7rem;margin-bottom:1.2rem;">
-            <div class="rail-card" style="padding:1rem;text-align:center;">
-                <div style="font-family:'DM Mono',monospace;font-size:0.6rem;color:#5a6480;letter-spacing:2px;text-transform:uppercase;">Occupancy</div>
-                <div style="font-family:'Syne',sans-serif;font-size:1.5rem;font-weight:800;color:#5ce1e6;">{occ_pct:.0f}%</div>
-            </div>
-            <div class="rail-card" style="padding:1rem;text-align:center;">
-                <div style="font-family:'DM Mono',monospace;font-size:0.6rem;color:#5a6480;letter-spacing:2px;text-transform:uppercase;">Crowd</div>
-                <div style="margin-top:4px;">{badge_crowd(crowd_level)}</div>
-            </div>
-            <div class="rail-card" style="padding:1rem;text-align:center;">
-                <div style="font-family:'DM Mono',monospace;font-size:0.6rem;color:#5a6480;letter-spacing:2px;text-transform:uppercase;">Seat Availability</div>
-                <div style="margin-top:4px;">{badge_seat(seat_avail)}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.error(f"Could not load history: {data.get('detail', 'Unknown error')}")
